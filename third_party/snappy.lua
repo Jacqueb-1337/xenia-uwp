@@ -13,7 +13,7 @@ project("snappy")
     "snappy/snappy-sinksource.h",
     "snappy/snappy-stubs-internal.cc",
     "snappy/snappy-stubs-internal.h",
-    "snappy/snappy-stubs-public.h",
+    "snappy-stubs-public.h",
     "snappy/snappy.cc",
     "snappy/snappy.h",
   })
