@@ -8,6 +8,7 @@
  */
 
 #include <cstring>
+#include <random>
 
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
@@ -56,6 +57,26 @@ X_HRESULT_result_t XamUserGetXUID_entry(dword_t user_index, dword_t type_mask,
   return result;
 }
 DECLARE_XAM_EXPORT1(XamUserGetXUID, kUserProfiles, kImplemented);
+dword_result_t XamUserGetIndexFromXUID_entry(qword_t xuid, dword_t flags,
+                                             lpdword_t index) {
+  if (!index) {
+    return X_E_INVALIDARG;
+  }
+
+  for (uint32_t user_index = 0; user_index < 4; ++user_index) {
+    if (!kernel_state()->IsUserSignedIn(user_index)) {
+      continue;
+    }
+    const auto& user_profile = kernel_state()->user_profile(user_index);
+    if (user_profile->xuid() == xuid) {
+      *index = user_index;
+      return X_ERROR_SUCCESS;
+    }
+  }
+
+  return X_E_NO_SUCH_USER;
+}
+DECLARE_XAM_EXPORT1(XamUserGetIndexFromXUID, kUserProfiles, kImplemented);
 
 dword_result_t XamUserGetSigninState_entry(dword_t user_index) {
   // Yield, as some games spam this.
@@ -98,6 +119,9 @@ X_HRESULT_result_t XamUserGetSigninInfo_entry(
   if (kernel_state()->IsUserSignedIn(user_index)) {
     const auto& user_profile = kernel_state()->user_profile(user_index);
     info->xuid = user_profile->xuid();
+    // Offset 0x08 is the flags field in newer XAM headers.
+    // Bit 0 tells titles that this user is signed in to Xbox Live.
+    info->unk08 = 1;
     info->signin_state = user_profile->signin_state();
     xe::string_util::copy_truncating(info->name, user_profile->name(),
                                      xe::countof(info->name));
@@ -433,8 +457,20 @@ dword_result_t XamUserCheckPrivilege_entry(dword_t user_index, dword_t mask,
     }
   }
 
-  // If we deny everything, games should hopefully not try to do stuff.
+  // Allow online privileges for a Live-signed-in profile.
   *out_value = 0;
+  if (user_index == 0xFF) {
+    for (uint32_t i = 0; i < 4; ++i) {
+      if (kernel_state()->IsUserSignedIn(i) &&
+          kernel_state()->user_profile(i)->signin_state() == 2) {
+        *out_value = 1;
+        break;
+      }
+    }
+  } else if (kernel_state()->IsUserSignedIn(user_index) &&
+             kernel_state()->user_profile(user_index)->signin_state() == 2) {
+    *out_value = 1;
+  }
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamUserCheckPrivilege, kUserProfiles, kStub);
@@ -670,17 +706,17 @@ dword_result_t XamWriteGamerTile_entry(dword_t arg1, dword_t arg2, dword_t arg3,
 DECLARE_XAM_EXPORT1(XamWriteGamerTile, kUserProfiles, kStub);
 
 dword_result_t XamSessionCreateHandle_entry(lpdword_t handle_ptr) {
-  *handle_ptr = 0xCAFEDEAD;
+  std::random_device rd;
+  std::uniform_int_distribution<uint32_t> dist(1, 0xFFFFFFFF);
+  *handle_ptr = dist(rd);
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamSessionCreateHandle, kUserProfiles, kStub);
 
 dword_result_t XamSessionRefObjByHandle_entry(dword_t handle,
                                               lpdword_t obj_ptr) {
-  assert_true(handle == 0xCAFEDEAD);
-  // TODO(PermaNull): Implement this properly,
-  // For the time being returning 0xDEADF00D will prevent crashing.
-  *obj_ptr = 0xDEADF00D;
+  // Netplay treats this as an opaque session token until sessions are proper XObjects.
+  *obj_ptr = static_cast<uint32_t>(handle);
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamSessionRefObjByHandle, kUserProfiles, kStub);

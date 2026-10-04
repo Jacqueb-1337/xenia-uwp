@@ -15,6 +15,11 @@
 #include "xenia/kernel/xam/xam_private.h"
 #include "xenia/kernel/xenumerator.h"
 #include "xenia/xbox.h"
+#include "xenia/kernel/xam/xam_net.h"
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#include <winsock2.h>
+#include "third_party/libcurl/include/curl/curl.h"
+#include "third_party/rapidjson/include/rapidjson/document.h"
 
 #if XE_PLATFORM_WIN32
 #include "xenia/base/platform_win.h"
@@ -86,10 +91,92 @@ dword_result_t XamEnumerate_entry(dword_t handle, dword_t flags,
 }
 DECLARE_XAM_EXPORT1(XamEnumerate, kNone, kImplemented);
 
+struct XTitleServer {
+  in_addr server_address;
+  uint32_t flags;
+  char server_description[200];
+};
+
+size_t NetplayCurlWriteCallback(char* data, size_t size, size_t count,
+                                void* user_data) {
+  auto* output = reinterpret_cast<std::string*>(user_data);
+  const size_t byte_count = size * count;
+  output->append(data, byte_count);
+  return byte_count;
+}
+
 dword_result_t XamCreateEnumeratorHandle_entry(
     dword_t user_index, dword_t app_id, dword_t open_message,
     dword_t close_message, dword_t extra_size, dword_t item_count,
     dword_t flags, lpdword_t out_handle) {
+  // 0x58039 is the title-server/LSP enumerator used by Xbox Live titles.
+  if (open_message == 0x58039) {
+    auto e = object_ref<XStaticEnumerator<XTitleServer>>(
+        new XStaticEnumerator<XTitleServer>(kernel_state(), item_count));
+
+    auto result = e->Initialize(user_index, app_id, open_message, close_message,
+                                flags, extra_size, nullptr);
+    if (XFAILED(result)) {
+      return result;
+    }
+
+    CURL* curl = curl_easy_init();
+    if (curl) {
+      std::string response;
+      curl_slist* headers = nullptr;
+      headers = curl_slist_append(headers, "Accept: application/json");
+      headers = curl_slist_append(headers, "Content-Type: application/json");
+
+      const std::string url =
+          fmt::format("{}/title/{:08x}/servers", GetApiAddress(),
+                      kernel_state()->title_id());
+      curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+      curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NetplayCurlWriteCallback);
+
+      const CURLcode curl_result = curl_easy_perform(curl);
+      long http_code = 0;
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+      curl_slist_free_all(headers);
+      curl_easy_cleanup(curl);
+
+      if (curl_result == CURLE_OK && http_code == 200) {
+        rapidjson::Document document;
+        document.Parse(response.c_str());
+        if (document.IsArray()) {
+          for (const auto& server : document.GetArray()) {
+            if (!server.IsObject() || !server.HasMember("address") ||
+                !server["address"].IsString()) {
+              continue;
+            }
+
+            XTitleServer* item = e->AppendItem();
+            std::memset(item, 0, sizeof(XTitleServer));
+            item->server_address.S_un.S_addr =
+                inet_addr(server["address"].GetString());
+            if (server.HasMember("flags") && server["flags"].IsUint()) {
+              item->flags = server["flags"].GetUint();
+            }
+            if (server.HasMember("description") &&
+                server["description"].IsString()) {
+              xe::string_util::copy_truncating(
+                  item->server_description, server["description"].GetString(),
+                  xe::countof(item->server_description));
+            }
+          }
+        }
+      } else {
+        XELOGW("Netplay: title-server enumeration failed (curl={}, HTTP={})",
+               static_cast<int>(curl_result), http_code);
+      }
+    }
+
+    *out_handle = e->handle();
+    return X_ERROR_SUCCESS;
+  }
+
   auto e = object_ref<XStaticUntypedEnumerator>(
       new XStaticUntypedEnumerator(kernel_state(), item_count, extra_size));
 

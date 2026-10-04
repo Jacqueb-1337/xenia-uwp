@@ -9,6 +9,7 @@ project("xenia-kernel")
   links({
     "aes_128",
     "fmt",
+    "libcurl",
     "xenia-apu",
     "xenia-base",
     "xenia-cpu",
@@ -16,6 +17,7 @@ project("xenia-kernel")
     "xenia-vfs",
   })
   defines({
+    "CURL_STATICLIB",
   })
   recursive_platform_files()
   files({

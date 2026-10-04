@@ -125,9 +125,9 @@ std::string EscapeBasicString(const std::string_view view) {
       result += u8"\\\\";
     } else if (c < 0x20 || c == 0x7F) {
       if (c <= 0xFFFF) {
-        result += fmt::format(u8"\\u{:04X}", c);
+        result += fmt::format(u8"\\u{:04X}", static_cast<uint32_t>(c));
       } else {
-        result += fmt::format(u8"\\u{:08X}", c);
+        result += fmt::format(u8"\\u{:08X}", static_cast<uint32_t>(c));
       }
     } else {
       utfcpp::append(static_cast<char32_t>(c), result);
@@ -159,7 +159,7 @@ std::string EscapeMultilineBasicString(const std::string_view view) {
     if (c == '\b') {
       result += u8"\\b";
     } else if (c == '\t' || c == '\n') {
-      result += c;
+      result += static_cast<char>(c);
     } else if (c == '\f') {
       result += u8"\\f";
     } else if (c == '\r') {
@@ -171,9 +171,9 @@ std::string EscapeMultilineBasicString(const std::string_view view) {
       result += u8"\\\\";
     } else if (c < 0x20 || c == 0x7F) {
       if (c <= 0xFFFF) {
-        result += fmt::format(u8"\\u{:04X}", c);
+        result += fmt::format(u8"\\u{:04X}", static_cast<uint32_t>(c));
       } else {
-        result += fmt::format(u8"\\u{:08X}", c);
+        result += fmt::format(u8"\\u{:08X}", static_cast<uint32_t>(c));
       }
     } else {
       utfcpp::append(static_cast<char32_t>(c), result);
