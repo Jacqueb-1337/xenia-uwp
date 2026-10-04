@@ -1023,6 +1023,196 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
 
       return X_E_SUCCESS;
     }
+    case 0x000B0018: {
+      struct message_data {
+        xe::be<uint32_t> hSession;
+        xe::be<uint32_t> dwFlags;
+        xe::be<uint32_t> dwMaxPublicSlots;
+        xe::be<uint16_t> dwMaxPrivateSlots;
+      }* data = reinterpret_cast<message_data*>(buffer);
+
+      XELOGI("XSessionModify({:08X} {:08X} {:08X} {:08X})",
+             data->hSession.get(), data->dwFlags.get(),
+             data->dwMaxPublicSlots.get(), data->dwMaxPrivateSlots.get());
+
+            #pragma region Curl
+      /*
+          TODO:
+              - Refactor the CURL out to a separate class.
+              - Use the overlapped task to do this asyncronously.
+      */
+
+      Document d;
+      d.SetObject();
+
+      Document::AllocatorType& allocator = d.GetAllocator();
+
+      size_t sz = allocator.Size();
+
+      std::stringstream sessionIdStr;
+      sessionIdStr << std::hex << std::noshowbase << std::setw(16)
+                   << std::setfill('0') << netplay_session_handles[data->hSession];
+
+      d.AddMember("flags", data->dwFlags, allocator);
+      d.AddMember("publicSlotsCount", data->dwMaxPublicSlots, allocator);
+      d.AddMember("privateSlotsCount", data->dwMaxPrivateSlots, allocator);
+
+      rapidjson::StringBuffer strbuf;
+      PrettyWriter<rapidjson::StringBuffer> writer(strbuf);
+      d.Accept(writer);
+
+      CURL* curl;
+      CURLcode res;
+
+      curl_global_init(CURL_GLOBAL_ALL);
+      curl = curl_easy_init();
+      if (curl == NULL) {
+        return 128;
+      }
+
+      std::stringstream out;
+
+      struct curl_slist* headers = NULL;
+      headers = curl_slist_append(headers, "Content-Type: application/json");
+      headers = curl_slist_append(headers, "Accept: application/json");
+      headers = curl_slist_append(headers, "charset: utf-8");
+
+      std::stringstream titleId;
+      titleId << std::hex << std::noshowbase << std::setw(8)
+              << std::setfill('0') << kernel_state_->title_id();
+
+      std::stringstream url;
+      url << GetApiAddress() << "/title/"
+          << titleId.str() << "/sessions/"
+          << sessionIdStr.str() << "/modify";
+
+      curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
+
+      curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
+      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+      curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
+      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, strbuf.GetString());
+
+      res = curl_easy_perform(curl);
+
+      int httpCode(0);
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+      curl_easy_cleanup(curl);
+      curl_global_cleanup();
+
+#pragma endregion
+
+
+      return X_E_SUCCESS;
+    }
+    case 0xB001E: {
+        // I think there's more in here.
+      struct message_data {
+        xe::be<uint32_t> session_handle;
+        xe::be<uint32_t> session_info;
+      }* data = reinterpret_cast<message_data*>(buffer);
+
+      XELOGI("XSessionMigrateHost({:08X});", buffer_length);
+
+      auto sessionInfo = memory_->TranslateVirtual<XSESSION_INFO*>(data->session_info);
+          #pragma region Curl
+      /*
+          TODO:
+              - Refactor the CURL out to a separate class.
+              - Use the overlapped task to do this asyncronously.
+      */
+
+                  char str[INET_ADDRSTRLEN];
+      in_addr ip_online = getOnlineIp();
+      inet_ntop(AF_INET, &ip_online, str, INET_ADDRSTRLEN);
+
+      Document d;
+      d.SetObject();
+
+      Document::AllocatorType& allocator = d.GetAllocator();
+
+      size_t sz = allocator.Size();
+
+      std::stringstream macAddressString;
+      macAddressString << std::hex << std::noshowbase << std::setw(12)
+                       << std::setfill('0')
+                       << NetplayMacToUint64(getMacAddress());
+
+      d.AddMember("hostAddress", std::string(str), allocator);
+      d.AddMember("macAddress", macAddressString.str(), allocator);
+      d.AddMember("port", getPort(), allocator);
+
+      rapidjson::StringBuffer strbuf;
+      PrettyWriter<rapidjson::StringBuffer> writer(strbuf);
+      d.Accept(writer);
+
+      CURL* curl;
+      CURLcode res;
+
+      curl_global_init(CURL_GLOBAL_ALL);
+      curl = curl_easy_init();
+      if (curl == NULL) {
+        return 128;
+      }
+
+      std::stringstream out;
+
+      struct curl_slist* headers = NULL;
+      headers = curl_slist_append(headers, "Content-Type: application/json");
+      headers = curl_slist_append(headers, "Accept: application/json");
+      headers = curl_slist_append(headers, "charset: utf-8");
+
+      std::stringstream titleId;
+      titleId << std::hex << std::noshowbase << std::setw(8)
+              << std::setfill('0') << kernel_state_->title_id();
+
+      std::stringstream sessionIdStr;
+      sessionIdStr << std::hex << std::noshowbase << std::setw(16)
+                   << std::setfill('0')
+                   << netplay_session_handles[data->session_handle];
+
+      std::stringstream url;
+      url << GetApiAddress() << "/title/"
+          << titleId.str()
+          << "/sessions/" << sessionIdStr.str() << "/migrate";
+
+      curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
+
+      curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
+      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+      curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NetplayXgiCurlCallback);
+      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, strbuf.GetString());
+
+      res = curl_easy_perform(curl);
+
+      int httpCode(0);
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+      curl_easy_cleanup(curl);
+      curl_global_cleanup();
+
+      if (httpCode == 200) {
+        rapidjson::Document d;
+        d.Parse(out.str());
+
+        sessionInfo->hostAddress.inaOnline.S_un.S_addr =
+            inet_addr(d["hostAddress"].GetString());
+
+        sessionInfo->hostAddress.ina.S_un.S_addr =
+            sessionInfo->hostAddress.inaOnline.S_un.S_addr;
+
+        auto myMac = new unsigned char[6];
+        NetplayStringToHex(d["macAddress"].GetString(), myMac);
+
+        memcpy(&sessionInfo->hostAddress.abEnet, myMac, 6);
+
+        sessionInfo->hostAddress.wPortOnline = getPort();
+      }
+#pragma endregion
+
+      return X_E_SUCCESS;
+    }
     case 0x000B0014: {
       // Gets 584107FB in game.
       // get high score table?
