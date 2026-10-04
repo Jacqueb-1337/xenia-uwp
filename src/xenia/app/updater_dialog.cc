@@ -589,7 +589,7 @@ bool UpdaterCompletionDialog::CopyFilePathToClipboard(
     const std::wstring& file_path) {
   std::u16string file_to_copy_path(file_path.begin(), file_path.end());
 
-#ifdef XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 && !XE_PLATFORM_WINRT
   size_t path_size =
       string_util::size_in_bytes(file_to_copy_path.c_str(), true);
   size_t buffer_size = path_size + sizeof(DROPFILES);

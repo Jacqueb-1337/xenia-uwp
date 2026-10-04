@@ -212,9 +212,6 @@ class Emulator {
     Unknown
   };
 
-  // Determine the executable signature
-  FileSignatureType GetFileSignature(const std::filesystem::path& path);
-
   // Launches a game from the given file path.
   // This will attempt to infer the type of the given file (such as an iso, etc)
   // using heuristics.
@@ -370,6 +367,10 @@ class Emulator {
   bool restoring_;
   threading::Fence restore_fence_;  // Fired on restore finish.
 };
+
+// Determine the executable signature
+Emulator::FileSignatureType GetFileSignature(const std::filesystem::path& path);
+
 
 }  // namespace xe
 

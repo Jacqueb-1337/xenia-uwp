@@ -217,9 +217,13 @@ filter("platforms:Windows")
     "/wd4201",   -- Nameless struct/unions are ok.
   })
   flags({
-    "MultiProcessorCompile",   -- Multiprocessor compilation.
-    "NoMinimalRebuild",        -- Required for /MP above.
+    "NoMinimalRebuild",
   })
+  if os.getenv("XENIA_LOW_MEMORY_BUILD") ~= "1" then
+    flags({
+      "MultiProcessorCompile",   -- Multiprocessor compilation.
+    })
+  end
 
   defines({
     "_CRT_NONSTDC_NO_DEPRECATE",

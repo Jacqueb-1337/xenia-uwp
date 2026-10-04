@@ -22,6 +22,13 @@
 #include "xenia/ui/resources.h"
 #include "xenia/ui/ui_event.h"
 #include "xenia/ui/window.h"
+#include <xenia/hid/input.h>
+
+#if XE_PLATFORM_WINRT
+#include "xenia-canary-uwp/XeniaUWP.h"
+#include "xenia-canary-uwp/UWPUtil.h"
+#include "xenia-canary-uwp/WinRTKeyboard.h"
+#endif
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb/stb_image.h"
@@ -324,7 +331,7 @@ bool ImGuiDrawer::LoadCustomFont(ImGuiIO& io, ImFontConfig& font_config,
 
 bool ImGuiDrawer::LoadWindowsFont(ImGuiIO& io, ImFontConfig& font_config,
                                   float font_size) {
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 & !XE_PLATFORM_WINRT
   PWSTR fonts_dir;
   HRESULT result = SHGetKnownFolderPath(FOLDERID_Fonts, 0, NULL, &fonts_dir);
   if (FAILED(result)) {
@@ -357,7 +364,7 @@ bool ImGuiDrawer::LoadWindowsFont(ImGuiIO& io, ImFontConfig& font_config,
 
 bool ImGuiDrawer::LoadJapaneseFont(ImGuiIO& io, float font_size) {
   // TODO(benvanik): jp font on other platforms?
-#if XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 & !XE_PLATFORM_WINRT
   PWSTR fonts_dir;
   HRESULT result = SHGetKnownFolderPath(FOLDERID_Fonts, 0, NULL, &fonts_dir);
   if (FAILED(result)) {
@@ -393,6 +400,7 @@ void ImGuiDrawer::InitializeFonts(const float font_size) {
   // Windows.
   io.IniFilename = nullptr;
 
+#ifndef XE_PLATFORM_WINRT
   ImFontConfig font_config;
   font_config.OversampleH = font_config.OversampleV = 2;
   font_config.PixelSnapH = true;
@@ -409,6 +417,13 @@ void ImGuiDrawer::InitializeFonts(const float font_size) {
   }
 
   LoadJapaneseFont(io, font_size);
+#else
+  ImFontConfig config;
+  config.MergeMode = true;
+  io.Fonts->AddFontFromFileTTF("Assets/Roboto-Regular.ttf", font_size, 0);
+  io.Fonts->AddFontFromFileTTF("Assets/NotoSansJP-Regular.ttf", font_size,
+                               &config, io.Fonts->GetGlyphRangesJapanese());
+#endif
 }
 
 void ImGuiDrawer::SetupFontTexture() {
@@ -479,6 +494,9 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
     return;
   }
 
+#if XE_PLATFORM_WINRT
+  UWP::SetUIOpen(!dialogs_.empty());
+#endif
   if (dialogs_.empty() && notifications_.empty()) {
     return;
   }
@@ -503,7 +521,15 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
       float(window_->GetMediumDpi()) / float(window_->GetDpi());
   io.DisplaySize.x = window_->GetActualPhysicalWidth() * physical_to_logical;
   io.DisplaySize.y = window_->GetActualPhysicalHeight() * physical_to_logical;
+#if XE_PLATFORM_WINRT
+  io.DisplayFramebufferScale.x = ((float) io.DisplaySize.x / 1920.0f) * 2.4f;
+  io.DisplayFramebufferScale.y = ((float) io.DisplaySize.y / 1080.0f) * 2.4f;
+  io.FontGlobalScale = ((float) io.DisplaySize.x / 1920.0f) * 2.4f;
+#endif
 
+#if XE_PLATFORM_WINRT
+  UWP::UpdateImGuiIO();
+#endif
   ImGui::NewFrame();
 
   assert_true(!IsDrawingDialogs());
@@ -565,12 +591,21 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   }
 }
 
+void ImGuiDrawer::SetIgnoreInput(bool ignore) { ignore_input = ignore; }
+bool ImGuiDrawer::GetIgnoreInput() {
+    return ignore_input;
+}
+
 void ImGuiDrawer::ClearDialogs() {
   size_t dialog_loop = 0;
 
   while (dialog_loop < dialogs_.size()) {
     RemoveDialog(dialogs_[dialog_loop++]);
   }
+
+#if XE_PLATFORM_WINRT
+  UWP::SetUIOpen(false);
+#endif
 }
 
 void ImGuiDrawer::RenderDrawLists(ImDrawData* data,

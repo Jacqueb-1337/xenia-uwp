@@ -24,6 +24,10 @@
 #include "xenia/ui/imgui_guest_notification.h"
 #include "xenia/ui/imgui_host_notification.h"
 
+#if XE_PLATFORM_WINRT
+#include "xenia-canary-uwp/WinRTKeyboard.h"
+#endif
+
 #include "xenia/kernel/xam/ui/community_sessions_ui.h"
 #include "xenia/kernel/xam/ui/create_profile_ui.h"
 #include "xenia/kernel/xam/ui/friends_ui.h"
@@ -293,6 +297,13 @@ void KeyboardInputDialog::OnDraw(ImGuiIO& io) {
     bool input_submitted =
         ImGui::InputText("##body", text_buffer_.data(), text_buffer_.size(),
                          ImGuiInputTextFlags_EnterReturnsTrue);
+#if XE_PLATFORM_WINRT
+    if (ImGui::IsItemHovered() &&
+        ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false)) {
+      UWP::ShowKeyboard();
+      ImGui::SetKeyboardFocusHere(-1);
+    }
+#endif
     // Context menu for paste functionality
     if (ImGui::BeginPopupContextItem("input_context_menu")) {
       if (ImGui::MenuItem("Paste")) {

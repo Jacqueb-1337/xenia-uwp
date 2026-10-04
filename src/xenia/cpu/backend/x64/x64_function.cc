@@ -17,7 +17,6 @@ namespace xe {
 namespace cpu {
 namespace backend {
 namespace x64 {
-
 X64Function::X64Function(Module* module, uint32_t address)
     : GuestFunction(module, address) {}
 
@@ -38,7 +37,6 @@ bool X64Function::CallImpl(ThreadState* thread_state, uint32_t return_address) {
         reinterpret_cast<void*>(uintptr_t(return_address)));
   return true;
 }
-
 }  // namespace x64
 }  // namespace backend
 }  // namespace cpu

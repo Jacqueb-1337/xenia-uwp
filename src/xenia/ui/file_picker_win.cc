@@ -13,6 +13,8 @@
 #include "xenia/ui/file_picker.h"
 #include "xenia/ui/window_win.h"
 
+#include <shobjidl.h>
+
 // Microsoft headers after platform_win.h.
 #include <wrl/client.h>
 

@@ -218,6 +218,31 @@ class EmulatorWindow {
     EmulatorWindow& emulator_window_;
   };
 
+  class WinRTFrontendDialog final : public ui::ImGuiDialog {
+   public:
+    WinRTFrontendDialog(ui::ImGuiDrawer* imgui_drawer,
+                   EmulatorWindow& emulator_window)
+        : ui::ImGuiDialog(imgui_drawer), emulator_window_(emulator_window) {
+
+        auto cl = dynamic_cast<cvar::ConfigVar<std::string>*>(
+        cvar::ConfigVars->find("cl")->second);
+        std::string cl_text = (std::string)cl->GetTypedConfigValue();
+        memcpy(cl_buffer, cl_text.data(), std::min((int) cl_text.size(), 128));
+    }
+   protected:
+    void OnDraw(ImGuiIO& io) override;
+
+   private:
+    std::shared_ptr<ui::ImmediateTexture> GetOrCreateBackground();
+
+    EmulatorWindow& emulator_window_;
+    std::shared_ptr<ui::ImmediateTexture> background_tex_ = nullptr;
+    std::string selectedPath;
+    bool ignoreInput = false;
+    char cl_buffer[128];
+    bool show_path_warning_ = false;
+  };
+
   explicit EmulatorWindow(Emulator* emulator,
                           ui::WindowedAppContext& app_context, uint32_t width,
                           uint32_t height);
@@ -305,6 +330,9 @@ class EmulatorWindow {
   bool update_found_ = false;
 
   std::unique_ptr<DisplayConfigDialog> display_config_dialog_;
+#if XE_PLATFORM_WINRT
+  std::unique_ptr<EmulatorWindow::WinRTFrontendDialog> gamelist_;
+#endif
 
   // Storing pointers and toggling dialog state is useful for broadcasting
   // messages back to guest.
@@ -317,6 +345,8 @@ class EmulatorWindow {
   std::unique_ptr<UpdaterCompletionDialog> updater_completion_dialog_;
 
   std::vector<RecentTitleEntry> recently_launched_titles_;
+
+  bool installing_additional_content_ = false;
 };
 
 }  // namespace app

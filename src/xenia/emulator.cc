@@ -139,7 +139,7 @@ Emulator::Emulator(const std::filesystem::path& command_line,
     }
   }
 
-#if XE_PLATFORM_WIN32 == 1
+#if XE_PLATFORM_WIN32 == 1 && !XE_PLATFORM_WINRT
   // Show a disclaimer that links to the quickstart
   // guide the first time they ever open the emulator
   uint64_t persistent_flags = GetPersistentEmulatorFlags();
@@ -357,7 +357,7 @@ X_STATUS Emulator::TerminateTitle() {
 const std::unique_ptr<vfs::Device> Emulator::CreateVfsDevice(
     const std::filesystem::path& path, const std::string_view mount_path) {
   // Must check if the type has changed e.g. XamSwapDisc
-  switch (GetFileSignature(path)) {
+  switch (xe::GetFileSignature(path)) {
     case FileSignatureType::XEX1:
     case FileSignatureType::XEX2:
     case FileSignatureType::ELF: {
@@ -386,7 +386,7 @@ const std::unique_ptr<vfs::Device> Emulator::CreateVfsDevice(
 }
 
 uint64_t Emulator::GetPersistentEmulatorFlags() {
-#if XE_PLATFORM_WIN32 == 1
+#if XE_PLATFORM_WIN32 == 1 && !XE_PLATFORM_WINRT
   uint64_t value = 0;
   DWORD value_size = sizeof(value);
   HKEY xenia_hkey = nullptr;
@@ -410,7 +410,7 @@ uint64_t Emulator::GetPersistentEmulatorFlags() {
 #endif
 }
 void Emulator::SetPersistentEmulatorFlags(uint64_t new_flags) {
-#if XE_PLATFORM_WIN32 == 1
+#if XE_PLATFORM_WIN32 == 1 && !XE_PLATFORM_WINRT
   uint64_t value = new_flags;
   DWORD value_size = sizeof(value);
   HKEY xenia_hkey = nullptr;
@@ -452,19 +452,19 @@ X_STATUS Emulator::MountPath(const std::filesystem::path& path,
   return X_STATUS_SUCCESS;
 }
 
-Emulator::FileSignatureType Emulator::GetFileSignature(
+Emulator::FileSignatureType GetFileSignature(
     const std::filesystem::path& path) {
   FILE* file = xe::filesystem::OpenFile(path, "rb");
 
   if (!file) {
-    return FileSignatureType::Unknown;
+    return Emulator::FileSignatureType::Unknown;
   }
 
   const uint64_t file_size = std::filesystem::file_size(path);
   constexpr int64_t header_size = 4;
 
   if (file_size < header_size) {
-    return FileSignatureType::Unknown;
+    return Emulator::FileSignatureType::Unknown;
   }
 
   char file_magic[header_size];
@@ -477,19 +477,19 @@ Emulator::FileSignatureType Emulator::GetFileSignature(
 
   switch (magic_value) {
     case xe::cpu::kXEX1Signature:
-      return FileSignatureType::XEX1;
+      return Emulator::FileSignatureType::XEX1;
     case xe::cpu::kXEX2Signature:
-      return FileSignatureType::XEX2;
+      return Emulator::FileSignatureType::XEX2;
     case xe::vfs::kCONSignature:
-      return FileSignatureType::CON;
+      return Emulator::FileSignatureType::CON;
     case xe::vfs::kLIVESignature:
-      return FileSignatureType::LIVE;
+      return Emulator::FileSignatureType::LIVE;
     case xe::vfs::kPIRSSignature:
-      return FileSignatureType::PIRS;
+      return Emulator::FileSignatureType::PIRS;
     case xe::vfs::kXSFSignature:
-      return FileSignatureType::XISO;
+      return Emulator::FileSignatureType::XISO;
     case xe::cpu::kElfSignature:
-      return FileSignatureType::ELF;
+      return Emulator::FileSignatureType::ELF;
     default:
       break;
   }
@@ -497,7 +497,7 @@ Emulator::FileSignatureType Emulator::GetFileSignature(
   magic_value = make_fourcc(file_magic[0], file_magic[1], 0, 0);
 
   if (xe::kernel::kEXESignature == magic_value) {
-    return FileSignatureType::EXE;
+    return Emulator::FileSignatureType::EXE;
   }
 
   file = xe::filesystem::OpenFile(path, "rb");
@@ -509,7 +509,7 @@ Emulator::FileSignatureType Emulator::GetFileSignature(
       make_fourcc(file_magic[0], file_magic[1], file_magic[2], file_magic[3]);
 
   if (xe::vfs::kZarMagic == magic_value) {
-    return FileSignatureType::ZAR;
+    return Emulator::FileSignatureType::ZAR;
   }
 
   // Check if XISO
@@ -519,11 +519,11 @@ Emulator::FileSignatureType Emulator::GetFileSignature(
   XELOGI("Checking for XISO");
 
   if (device->Initialize()) {
-    return FileSignatureType::XISO;
+    return Emulator::FileSignatureType::XISO;
   }
 
   XELOGE("{}: {} ({:08X})", __func__, path.extension(), magic_value);
-  return FileSignatureType::Unknown;
+  return Emulator::FileSignatureType::Unknown;
 }
 
 X_STATUS Emulator::LaunchPath(const std::filesystem::path& path) {
@@ -1228,25 +1228,25 @@ const std::filesystem::path Emulator::GetNewDiscPath(
     std::string window_message) {
   std::filesystem::path path = "";
 
-  auto file_picker = xe::ui::FilePicker::Create();
-  file_picker->set_mode(ui::FilePicker::Mode::kOpen);
-  file_picker->set_type(ui::FilePicker::Type::kFile);
-  file_picker->set_multi_selection(false);
-  file_picker->set_title(!window_message.empty() ? window_message
-                                                 : "Select Content Package");
-  file_picker->set_extensions({
-      {"Supported Files", "*.iso;*.xex;*.xcp;*.*"},
-      {"Disc Image (*.iso)", "*.iso"},
-      {"Xbox Executable (*.xex)", "*.xex"},
-      {"All Files (*.*)", "*.*"},
-  });
+  //auto file_picker = xe::ui::FilePicker::Create();
+  //file_picker->set_mode(ui::FilePicker::Mode::kOpen);
+  //file_picker->set_type(ui::FilePicker::Type::kFile);
+  //file_picker->set_multi_selection(false);
+  //file_picker->set_title(!window_message.empty() ? window_message
+  //                                               : "Select Content Package");
+  //file_picker->set_extensions({
+  //    {"Supported Files", "*.iso;*.xex;*.xcp;*.*"},
+  //    {"Disc Image (*.iso)", "*.iso"},
+  //    {"Xbox Executable (*.xex)", "*.xex"},
+  //    {"All Files (*.*)", "*.*"},
+  //});
 
-  if (file_picker->Show()) {
-    auto selected_files = file_picker->selected_files();
-    if (!selected_files.empty()) {
-      path = selected_files[0];
-    }
-  }
+  //if (file_picker->Show()) {
+  //  auto selected_files = file_picker->selected_files();
+  //  if (!selected_files.empty()) {
+  //    path = selected_files[0];
+  //  }
+  //}
   return path;
 }
 

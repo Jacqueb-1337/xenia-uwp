@@ -16,6 +16,10 @@
 #include "xenia/kernel/xam/xam_private.h"
 #include "xenia/xbox.h"
 
+#if XE_PLATFORM_WINRT
+#include "xenia-canary-uwp/UWPUtil.h"
+#endif
+
 namespace xe {
 namespace kernel {
 namespace xam {

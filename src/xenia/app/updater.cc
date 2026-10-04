@@ -1,4 +1,4 @@
-﻿/**
+/**
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
@@ -186,7 +186,7 @@ bool Updater::CheckForUpdates(bool stable, const std::string& branch,
   return update_available;
 }
 
-#ifdef XE_PLATFORM_WIN32
+#if XE_PLATFORM_WIN32 && !XE_PLATFORM_WINRT
 std::wstring Updater::RunPowershellCommand(const std::string& command) const {
   std::wstring result;
   std::string ps_command =
@@ -240,6 +240,13 @@ bool Updater::IsAnotherInstanceRunning() const {
 
   return instance_count > 0;
 }
+#elif XE_PLATFORM_WINRT
+std::wstring Updater::RunPowershellCommand(const std::string& command) const {
+  (void)command;
+  return {};
+}
+
+bool Updater::IsAnotherInstanceRunning() const { return false; }
 #endif
 
 uint32_t Updater::GetLatestCommitHash(const std::string& branch,
@@ -611,6 +618,10 @@ bool Updater::ParseCommitMessages(std::vector<uint8_t>& response_buffer,
 }
 
 bool Updater::UpdateAndRestart(const std::filesystem::path& zip_path) {
+#if XE_PLATFORM_WINRT
+  (void)zip_path;
+  return false;
+#else
   std::error_code ec;
 
   if (zip_path.empty()) {
@@ -822,6 +833,7 @@ bool Updater::UpdateAndRestart(const std::filesystem::path& zip_path) {
   // Doesn't return
   execlp("/bin/bash", "/bin/bash", "-c", exec.c_str(), nullptr);
   return false;
+#endif
 #endif
 }
 
