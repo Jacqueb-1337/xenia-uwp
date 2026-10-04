@@ -105,6 +105,26 @@ void NetplayUint64ToXnkid(uint64_t value, XNKID* session_id) {
 
 std::map<uint32_t, uint64_t> netplay_session_handles;
 
+struct XSESSION_REGISTRATION_RESULTS {
+  xe::be<uint32_t> registrants_count;
+  xe::be<uint32_t> registrants_ptr;
+};
+
+struct XSESSION_REGISTRANT {
+  xe::be<uint64_t> qwMachineID;
+  xe::be<uint32_t> bTrustworthiness;
+  xe::be<uint32_t> bNumUsers;
+  xe::be<uint32_t> rgUsers;
+};
+
+uint64_t NetplayByteArrayToUint64(const unsigned char* data) {
+  uint64_t value = 0;
+  for (int i = 0; i < 8; ++i) {
+    value = (value << 8) | data[i];
+  }
+  return value;
+};
+
 struct XUSER_CONTEXT {
   xe::be<uint32_t> context_id;
   xe::be<uint32_t> value;
@@ -1208,6 +1228,133 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
         memcpy(&sessionInfo->hostAddress.abEnet, myMac, 6);
 
         sessionInfo->hostAddress.wPortOnline = getPort();
+      }
+#pragma endregion
+
+      return X_E_SUCCESS;
+    }
+    case 0x000B001A: {
+      struct message_data {
+        xe::be<uint32_t> session_handle;
+        xe::be<uint32_t> flags;
+        xe::be<uint32_t> unk1;
+        xe::be<uint32_t> unk2;
+        xe::be<uint32_t> session_nonce;
+        xe::be<uint32_t> results_buffer_length;
+        xe::be<uint32_t> results_buffer;
+        xe::be<uint32_t> unk3;
+      }* data = reinterpret_cast<message_data*>(buffer);
+      XELOGI(
+          "XSessionArbitrationRegister({:08X}, {:08X}, {:08X}, {:08X}, {:08X}, "
+          "{:08X}, {:08X}, {:08X});",
+          data->session_handle.get(), data->flags.get(), data->unk1.get(),
+          data->unk2.get(), data->session_nonce.get(),
+          data->results_buffer_length.get(), data->results_buffer.get());
+
+      auto results =
+          memory_->TranslateVirtual<XSESSION_REGISTRATION_RESULTS*>(
+          data->results_buffer);
+
+      // TODO: Remove hardcoded results, populate properly.
+
+                  #pragma region Curl
+      /*
+          TODO:
+              - Refactor the CURL out to a separate class.
+              - Use the overlapped task to do this asyncronously.
+      */
+
+      std::stringstream sessionIdStr;
+      sessionIdStr << std::hex << std::noshowbase << std::setw(16)
+                   << std::setfill('0')
+                   << netplay_session_handles[data->session_handle];
+
+      CURL* curl;
+      CURLcode res;
+
+      curl_global_init(CURL_GLOBAL_ALL);
+      curl = curl_easy_init();
+      if (curl == NULL) {
+        return 128;
+      }
+
+      std::stringstream out;
+
+      struct curl_slist* headers = NULL;
+      headers = curl_slist_append(headers, "Content-Type: application/json");
+      headers = curl_slist_append(headers, "Accept: application/json");
+      headers = curl_slist_append(headers, "charset: utf-8");
+
+      std::stringstream titleId;
+      titleId << std::hex << std::noshowbase << std::setw(8)
+              << std::setfill('0') << kernel_state_->title_id();
+
+      std::stringstream url;
+      url << GetApiAddress() << "/title/" << titleId.str() << "/sessions/"
+          << sessionIdStr.str() << "/arbitration";
+
+      curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
+
+      curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
+      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+      curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NetplayXgiCurlCallback);
+
+      res = curl_easy_perform(curl);
+
+      int httpCode(0);
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+      curl_easy_cleanup(curl);
+      curl_global_cleanup();
+
+      if (httpCode == 200) {
+        rapidjson::Document d;
+        d.Parse(out.str());
+
+        auto machinesArray = d["machines"].GetArray();
+
+        uint32_t registrants_ptr = memory_->SystemHeapAlloc(sizeof(XSESSION_REGISTRANT) *
+                                     machinesArray.Size());
+
+        uint32_t users_ptr =
+            memory_->SystemHeapAlloc(sizeof(uint64_t) * d["totalPlayers"].GetInt());
+
+        auto registrants =
+            memory_->TranslateVirtual<XSESSION_REGISTRANT*>(registrants_ptr);
+
+        auto users =
+            memory_->TranslateVirtual<xe::be<uint64_t>*>(users_ptr);
+
+        results->registrants_ptr = registrants_ptr;
+        results->registrants_count = machinesArray.Size();
+
+
+        unsigned int machineIndex = 0;
+        unsigned int machinePlayerIndex = 0;
+        unsigned int resultsPlayerIndex = 0;
+        for (const auto& machine : machinesArray) {
+          auto playersArray = machine["players"].GetArray();
+          registrants[machineIndex].bNumUsers = playersArray.Size();
+          registrants[machineIndex].bTrustworthiness = 1;
+          unsigned char machineId[8];
+          NetplayStringToHex(machine["id"].GetString(), machineId);
+          registrants[machineIndex].qwMachineID = NetplayByteArrayToUint64(machineId);
+          registrants[machineIndex].rgUsers = users_ptr + (8 * resultsPlayerIndex);
+
+          machinePlayerIndex = 0;
+          for (const auto& player : playersArray) {
+            unsigned char xuid[8];
+            NetplayStringToHex(player["xuid"].GetString(), xuid);
+
+            users[resultsPlayerIndex] = NetplayByteArrayToUint64(xuid);
+
+            machinePlayerIndex += 1;
+            resultsPlayerIndex += 1;
+          }
+
+          machineIndex += 1;
+        }
       }
 #pragma endregion
 
