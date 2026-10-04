@@ -105,6 +105,52 @@ void NetplayUint64ToXnkid(uint64_t value, XNKID* session_id) {
 
 std::map<uint32_t, uint64_t> netplay_session_handles;
 
+struct XUSER_CONTEXT {
+  xe::be<uint32_t> context_id;
+  xe::be<uint32_t> value;
+};
+
+struct XSESSION_SEARCHRESULT {
+  XSESSION_INFO info;
+  xe::be<uint32_t> open_public_slots;
+  xe::be<uint32_t> open_priv_slots;
+  xe::be<uint32_t> filled_public_slots;
+  xe::be<uint32_t> filled_priv_slots;
+  xe::be<uint32_t> properties_count;
+  xe::be<uint32_t> contexts_count;
+  xe::be<uint32_t> properties_ptr;
+  xe::be<uint32_t> contexts_ptr;
+};
+
+struct XSESSION_SEARCHRESULT_HEADER {
+  xe::be<uint32_t> search_results_count;
+  xe::be<uint32_t> search_results_ptr;
+};
+
+struct XSESSION_LOCAL_DETAILS {
+  xe::be<uint32_t> dwUserIndexHost;
+  xe::be<uint32_t> dwGameType;
+  xe::be<uint32_t> dwGameMode;
+  xe::be<uint32_t> dwFlags;
+  xe::be<uint32_t> dwMaxPublicSlots;
+  xe::be<uint32_t> dwMaxPrivateSlots;
+  xe::be<uint32_t> dwAvailablePublicSlots;
+  xe::be<uint32_t> dwAvailablePrivateSlots;
+  xe::be<uint32_t> dwActualMemberCount;
+  xe::be<uint32_t> dwReturnedMemberCount;
+  xe::be<uint32_t> eState;
+  xe::be<uint64_t> qwNonce;
+  XSESSION_INFO sessionInfo;
+  XNKID xnkidArbitration;
+  xe::be<uint32_t> pSessionMembers;
+};
+
+struct XSESSION_MEMBER {
+  xe::be<uint64_t> xuidOnline;
+  xe::be<uint32_t> dwUserIndex;
+  xe::be<uint32_t> dwFlags;
+};
+
 XgiApp::XgiApp(KernelState* kernel_state) : App(kernel_state, 0xFB) {}
 
 // http://mb.mirage.org/bugzilla/xliveless/main.c
@@ -681,6 +727,300 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
       }
 
       clearXnaddrCache();
+      return X_E_SUCCESS;
+    }
+    case 0x000B001C: {
+      XELOGI("XSessionSearchEx");
+
+      int i = 0;
+      int j = 0;
+
+      struct message_data {
+        xe::be<uint32_t> proc_index;
+        xe::be<uint32_t> user_index;
+        xe::be<uint32_t> num_results;
+        xe::be<uint16_t> num_props;
+        xe::be<uint16_t> num_ctx;
+        xe::be<uint32_t> props_ptr;
+        xe::be<uint32_t> ctx_ptr;
+        xe::be<uint32_t> cbResultsBuffer;
+        xe::be<uint32_t> pSearchResults;
+        xe::be<uint32_t> num_users;
+      }* data = reinterpret_cast<message_data*>(buffer);
+
+      auto* pSearchContexts =
+          memory_->TranslateVirtual<XUSER_CONTEXT*>(data->ctx_ptr);
+
+      uint32_t results_ptr = data->pSearchResults + sizeof(XSESSION_SEARCHRESULT_HEADER);
+      auto* result = memory_->TranslateVirtual<XSESSION_SEARCHRESULT*>(results_ptr);
+
+            auto resultsHeader =
+          memory_->TranslateVirtual<XSESSION_SEARCHRESULT_HEADER*>(
+              data->pSearchResults);
+
+#pragma region Curl
+      /*
+          TODO:
+              - Refactor the CURL out to a separate class.
+              - Use the overlapped task to do this asyncronously.
+      */
+
+      Document d;
+      d.SetObject();
+
+      Document::AllocatorType& allocator = d.GetAllocator();
+
+      size_t sz = allocator.Size();
+
+      d.AddMember("searchIndex", data->proc_index, allocator);
+      d.AddMember("resultsCount", data->num_results, allocator);
+
+      rapidjson::StringBuffer strbuf;
+      PrettyWriter<rapidjson::StringBuffer> writer(strbuf);
+      d.Accept(writer);
+
+      CURL* curl;
+      CURLcode res;
+
+      curl_global_init(CURL_GLOBAL_ALL);
+      curl = curl_easy_init();
+      if (curl == NULL) {
+        return 128;
+      }
+
+      std::stringstream out;
+
+      struct curl_slist* headers = NULL;
+      headers = curl_slist_append(headers, "Content-Type: application/json");
+      headers = curl_slist_append(headers, "Accept: application/json");
+      headers = curl_slist_append(headers, "charset: utf-8");
+
+      std::stringstream titleId;
+      titleId << std::hex << std::noshowbase << std::setw(8)
+              << std::setfill('0') << kernel_state_->title_id();
+
+      std::stringstream url;
+      url << GetApiAddress() << "/title/" << titleId.str()
+          << "/sessions/search";
+
+      curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
+
+      curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
+      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+      curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NetplayXgiCurlCallback);
+      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, strbuf.GetString());
+
+      res = curl_easy_perform(curl);
+
+      int httpCode(0);
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+      curl_easy_cleanup(curl);
+      curl_global_cleanup();
+
+      if (httpCode == 201) {
+        rapidjson::Document d;
+        d.Parse(out.str());
+
+        const Value& sessionsJsonArray = d.GetArray();
+
+        unsigned int i = 0;
+        for (Value::ConstValueIterator sessionJsonObjectPtr =
+                 sessionsJsonArray.Begin();
+             sessionJsonObjectPtr != sessionsJsonArray.End();
+             ++sessionJsonObjectPtr) {
+          uint32_t result_guest_address = data->pSearchResults +
+                                          sizeof(XSESSION_SEARCHRESULT_HEADER) +
+                                          (sizeof(XSESSION_SEARCHRESULT) * i);
+          auto* resultHostPtr =
+              memory_->TranslateVirtual<XSESSION_SEARCHRESULT*>(
+                  result_guest_address);
+
+
+          // if (i > 1) break;
+          if (data->num_results <= i) break;
+            result[i].contexts_count = (uint32_t)data->num_ctx;
+            result[i].properties_count = 3;
+            result[i].contexts_ptr = data->ctx_ptr;
+            result[i].properties_ptr = data->props_ptr;
+          result[i].filled_priv_slots =
+              (*sessionJsonObjectPtr)["filledPrivateSlotsCount"].GetInt();
+          result[i].filled_public_slots =
+              (*sessionJsonObjectPtr)["filledPublicSlotsCount"].GetInt();
+          result[i].open_priv_slots =
+              (*sessionJsonObjectPtr)["openPrivateSlotsCount"].GetInt();
+          result[i].open_public_slots =
+              (*sessionJsonObjectPtr)["openPublicSlotsCount"].GetInt();
+          NetplayStringToHex((*sessionJsonObjectPtr)["id"].GetString(),
+                        (unsigned char*)&result[i].info.sessionID.ab);
+
+            resultHostPtr[i].info.hostAddress.wPortOnline =
+                (*sessionJsonObjectPtr)["port"].GetInt();
+
+            for (int j = 0; j < 16; j++) {
+              result[i].info.keyExchangeKey.ab[j] = j;
+            }
+
+            NetplayStringToHex((*sessionJsonObjectPtr)["macAddress"].GetString(), result[i].info.hostAddress.abEnet);
+            NetplayStringToHex((*sessionJsonObjectPtr)["macAddress"].GetString(), result[i].info.hostAddress.abOnline);
+
+            inet_pton(AF_INET,
+            (*sessionJsonObjectPtr)["hostAddress"].GetString(),
+                      &resultHostPtr[i].info.hostAddress.ina.S_un.S_addr);
+            inet_pton(AF_INET,
+            (*sessionJsonObjectPtr)["hostAddress"].GetString(),
+                      &resultHostPtr[i].info.hostAddress.inaOnline.S_un.S_addr);
+
+          i += 1;
+        }
+
+        resultsHeader->search_results_count = i;
+        resultsHeader->search_results_ptr =
+            data->pSearchResults + sizeof(XSESSION_SEARCHRESULT_HEADER);
+      }
+#pragma endregion
+      return X_E_SUCCESS;
+    }
+    case 0xB001D: {
+      struct message_data {
+        xe::be<uint32_t> unk_handle;
+        xe::be<uint32_t> details_buffer_size;
+        xe::be<uint32_t> details_buffer;
+        xe::be<uint32_t> unk4;
+        xe::be<uint32_t> unk5;
+        xe::be<uint32_t> unk6;
+      }* data = reinterpret_cast<message_data*>(buffer);
+
+      XELOGI("XSessionGetDetails({:08X});", buffer_length);
+
+      auto details = memory_->TranslateVirtual<XSESSION_LOCAL_DETAILS*>(
+          data->details_buffer);
+
+            #pragma region Curl
+            /*
+                TODO:
+                    - Refactor the CURL out to a separate class.
+                    - Use the overlapped task to do this asyncronously.
+            */
+
+            std::stringstream sessionIdStr;
+            sessionIdStr << std::hex << std::noshowbase << std::setw(16)
+                         << std::setfill('0') <<
+                         netplay_session_handles[data->unk_handle];
+
+            CURL* curl;
+            CURLcode res;
+
+            curl_global_init(CURL_GLOBAL_ALL);
+            curl = curl_easy_init();
+            if (curl == NULL) {
+              return 128;
+            }
+
+            std::stringstream out;
+
+            struct curl_slist* headers = NULL;
+            headers = curl_slist_append(headers, "Content-Type: application/json");
+            headers = curl_slist_append(headers, "Accept: application/json");
+            headers = curl_slist_append(headers, "charset: utf-8");
+
+            std::stringstream titleId;
+            titleId << std::hex << std::noshowbase << std::setw(8)
+                    << std::setfill('0') << kernel_state_->title_id();
+
+            std::stringstream url;
+            url << GetApiAddress() << "/title/"
+                << titleId.str() <<
+            "/sessions/"
+                << sessionIdStr.str() << "/details";
+
+            curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
+
+            curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+            curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NetplayXgiCurlCallback);
+
+            res = curl_easy_perform(curl);
+
+            int httpCode(0);
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+            curl_easy_cleanup(curl);
+            curl_global_cleanup();
+
+            if (httpCode == 200) {
+              rapidjson::Document d;
+              d.Parse(out.str());
+
+                    memcpy(&details->sessionInfo.sessionID,
+                    sessionIdStr.str().c_str(), 8);
+
+
+              details->sessionInfo.hostAddress.inaOnline.S_un.S_addr =
+                  inet_addr(d["hostAddress"].GetString());
+
+              details->sessionInfo.hostAddress.ina.S_un.S_addr =
+                  details->sessionInfo.hostAddress.inaOnline.S_un.S_addr;
+
+              auto myMac = new unsigned char[12];
+              NetplayStringToHex(d["macAddress"].GetString(), myMac);
+
+              memcpy(&details->sessionInfo.hostAddress.abEnet, myMac, 6);
+
+              details->sessionInfo.hostAddress.wPortOnline =
+              d["port"].GetInt();
+
+              details->dwUserIndexHost = 0;
+              details->dwGameMode = 0;
+              details->dwGameType = 0;
+              details->eState = 0;
+
+              details->dwFlags = d["flags"].GetInt();
+              details->dwMaxPublicSlots = d["publicSlotsCount"].GetInt();
+              details->dwMaxPrivateSlots = d["privateSlotsCount"].GetInt();
+              details->dwAvailablePrivateSlots =
+              d["openPublicSlotsCount"].GetInt();
+              details->dwAvailablePublicSlots =
+              d["openPrivateSlotsCount"].GetInt();
+              details->dwActualMemberCount =
+              d["filledPublicSlotsCount"].GetInt() +
+                                             d["filledPrivateSlotsCount"].GetInt();
+              details->dwReturnedMemberCount = d["players"].GetArray().Size();
+
+
+              details->qwNonce = 0xAAAAAAAAAAAAAAAA;
+
+              for (int i = 0; i < 16; i++) {
+                details->sessionInfo.keyExchangeKey.ab[i] = i;
+              }
+
+              for (int i = 0; i < 20; i++) {
+                details->sessionInfo.hostAddress.abOnline[i] = i;
+              }
+
+              uint32_t members_ptr =
+                  memory_->SystemHeapAlloc(sizeof(XSESSION_MEMBER) *
+                  details->dwReturnedMemberCount);
+
+              auto members =
+              memory_->TranslateVirtual<XSESSION_MEMBER*>(members_ptr);
+
+              details->pSessionMembers = members_ptr;
+
+              unsigned int i = 0;
+              for (const auto& player : d["players"].GetArray()) {
+                members[i].dwUserIndex = 0xFE;
+                NetplayStringToHex(player["xuid"].GetString(), (unsigned char*)&members[i].xuidOnline); i += 1;
+              }
+
+
+            } else {
+              return 1;
+            }
+      #pragma endregion
+
       return X_E_SUCCESS;
     }
     case 0x000B0014: {
