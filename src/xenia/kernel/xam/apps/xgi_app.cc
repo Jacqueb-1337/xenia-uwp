@@ -433,17 +433,16 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
                     << std::setfill('0') << kernel_state_->title_id();
 
             std::stringstream url;
-            url << GetApiAddress() << "/title/"
-                << titleId.str() << "/sessions";
+            url << GetApiAddress() << "/title/" << titleId.str() << "/sessions/"
+                << sessionIdStr.str();
 
             curl_easy_setopt(curl, CURLOPT_URL, url.str().c_str());
 
-            curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "POST");
+            curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
             curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
             curl_easy_setopt(curl, CURLOPT_USERAGENT, "xenia");
             curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
             curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, NetplayXgiCurlCallback);
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, strbuf.GetString());
 
             res = curl_easy_perform(curl);
 
@@ -468,7 +467,7 @@ X_HRESULT XgiApp::DispatchMessageSync(uint32_t message, uint32_t buffer_ptr,
                 memcpy(&pSessionInfo->hostAddress.abEnet, myMac, 6);
                 memcpy(&pSessionInfo->hostAddress.abOnline, myMac, 6);
 
-                pSessionInfo->hostAddress.wPortOnline = 36020;
+                pSessionInfo->hostAddress.wPortOnline = getPort();
             }
     #pragma endregion
         }
