@@ -2202,7 +2202,7 @@ EmulatorWindow::ControllerHotKey EmulatorWindow::ProcessControllerHotkey(
     // Must clear dialogs to prevent stacking
     ClearDialogs();
 
-    // Titles may contain Unicode characters such as At Worldâ€™s End
+    // Titles may contain Unicode characters such as At WorldÃ¢â‚¬â„¢s End
     // Must use ImGUI font that can render these Unicode characters
     std::string title_name;
 
@@ -2730,6 +2730,86 @@ void EmulatorWindow::WinRTFrontendDialog::OnDraw(ImGuiIO& io) {
           UWP::SetGamePaths(paths);
         }
       });
+    }
+
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Netplay", ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (ImGui::Button("Netplay Status")) {
+        emulator_window_.NetplayStatus();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Manager")) {
+        emulator_window_.ToggleFriendsDialog();
+      }
+
+      const char* network_mode_label = "Offline";
+      switch (cvars::network_mode) {
+        case xe::kernel::NETWORK_MODE::LAN:
+          network_mode_label = "LAN / System Link";
+          break;
+        case xe::kernel::NETWORK_MODE::XBOXLIVE:
+          network_mode_label = "Xbox Live";
+          break;
+        default:
+          break;
+      }
+      if (ImGui::BeginCombo("Network Mode", network_mode_label)) {
+        if (ImGui::Selectable("Offline", cvars::network_mode == xe::kernel::NETWORK_MODE::OFFLINE)) {
+          emulator_window_.SetNetworkMode(xe::kernel::NETWORK_MODE::OFFLINE);
+        }
+        if (ImGui::Selectable("LAN / System Link", cvars::network_mode == xe::kernel::NETWORK_MODE::LAN)) {
+          emulator_window_.SetNetworkMode(xe::kernel::NETWORK_MODE::LAN);
+        }
+        if (ImGui::Selectable("Xbox Live", cvars::network_mode == xe::kernel::NETWORK_MODE::XBOXLIVE)) {
+          emulator_window_.SetNetworkMode(xe::kernel::NETWORK_MODE::XBOXLIVE);
+        }
+        ImGui::EndCombo();
+      }
+
+      const std::string current_api =
+          cvars::api_address.empty() ? "Default" : cvars::api_address;
+      if (ImGui::BeginCombo("API Address", current_api.c_str())) {
+        for (const auto& api_address : xe::kernel::XLiveAPI::ParseAPIList()) {
+          const bool selected = api_address == cvars::api_address;
+          if (ImGui::Selectable(api_address.c_str(), selected)) {
+            emulator_window_.SetAPIAddress(api_address);
+          }
+          if (selected) {
+            ImGui::SetItemDefaultFocus();
+          }
+        }
+        ImGui::EndCombo();
+      }
+
+      const std::string current_interface =
+          xe::kernel::XLiveAPI::interface_name.empty()
+              ? "Automatic"
+              : xe::kernel::XLiveAPI::interface_name;
+      if (ImGui::BeginCombo("Network Interface", current_interface.c_str())) {
+        const bool automatic = cvars::network_guid.empty();
+        if (ImGui::Selectable("Automatic", automatic)) {
+          emulator_window_.SetNetworkInterfaceByGUID("");
+        }
+        if (automatic) {
+          ImGui::SetItemDefaultFocus();
+        }
+
+        for (const auto& adapter : xe::kernel::XLiveAPI::adapter_addresses) {
+          const std::string guid = adapter.AdapterName;
+          const std::string interface_name =
+              xe::kernel::XLiveAPI::GetNetworkFriendlyName(adapter);
+          const bool selected = guid == cvars::network_guid;
+          ImGui::PushID(guid.c_str());
+          if (ImGui::Selectable(interface_name.c_str(), selected)) {
+            emulator_window_.SetNetworkInterfaceByGUID(guid);
+          }
+          if (selected) {
+            ImGui::SetItemDefaultFocus();
+          }
+          ImGui::PopID();
+        }
+        ImGui::EndCombo();
+      }
     }
 
     ImGui::Spacing();
