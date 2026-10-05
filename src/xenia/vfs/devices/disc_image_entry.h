@@ -10,6 +10,7 @@
 #ifndef XENIA_VFS_DEVICES_DISC_IMAGE_ENTRY_H_
 #define XENIA_VFS_DEVICES_DISC_IMAGE_ENTRY_H_
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -24,14 +25,14 @@ class DiscImageDevice;
 class DiscImageEntry : public Entry {
  public:
   DiscImageEntry(Device* device, Entry* parent, const std::string_view path,
-                 MappedMemory* mmap);
+                 const std::filesystem::path& host_path);
   ~DiscImageEntry() override;
 
-  static std::unique_ptr<DiscImageEntry> Create(Device* device, Entry* parent,
-                                                const std::string_view name,
-                                                MappedMemory* mmap);
+  static std::unique_ptr<DiscImageEntry> Create(
+      Device* device, Entry* parent, const std::string_view name,
+      const std::filesystem::path& host_path);
 
-  MappedMemory* mmap() const { return mmap_; }
+  const std::filesystem::path& host_path() const { return host_path_; }
   size_t data_offset() const { return data_offset_; }
   size_t data_size() const { return data_size_; }
 
@@ -45,7 +46,7 @@ class DiscImageEntry : public Entry {
  private:
   friend class DiscImageDevice;
 
-  MappedMemory* mmap_;
+  std::filesystem::path host_path_;
   size_t data_offset_;
   size_t data_size_;
 };

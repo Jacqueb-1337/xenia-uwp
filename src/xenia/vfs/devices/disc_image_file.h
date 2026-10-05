@@ -10,6 +10,8 @@
 #ifndef XENIA_VFS_DEVICES_DISC_IMAGE_FILE_H_
 #define XENIA_VFS_DEVICES_DISC_IMAGE_FILE_H_
 
+#include <cstdio>
+
 #include "xenia/vfs/file.h"
 
 namespace xe {
@@ -34,6 +36,7 @@ class DiscImageFile : public File {
 
  private:
   DiscImageEntry* entry_;
+  FILE* file_ = nullptr;
 };
 
 }  // namespace vfs

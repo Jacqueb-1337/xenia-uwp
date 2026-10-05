@@ -11,15 +11,23 @@
 
 #include <algorithm>
 
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/vfs/devices/disc_image_entry.h"
 namespace xe {
 namespace vfs {
 
 DiscImageFile::DiscImageFile(uint32_t file_access, DiscImageEntry* entry)
-    : File(file_access, entry), entry_(entry) {}
+    : File(file_access, entry), entry_(entry) {
+  file_ = xe::filesystem::OpenFile(entry_->host_path(), "rb");
+}
 
-DiscImageFile::~DiscImageFile() = default;
+DiscImageFile::~DiscImageFile() {
+  if (file_) {
+    fclose(file_);
+    file_ = nullptr;
+  }
+}
 
 void DiscImageFile::Destroy() { delete this; }
 
@@ -29,16 +37,21 @@ X_STATUS DiscImageFile::ReadSync(void* buffer, size_t buffer_length,
     return X_STATUS_END_OF_FILE;
   }
 
-  if (entry_->data_offset() >= entry_->mmap()->size()) {
-    xe::FatalError("This ISO image is corrupted and cannot be played.");
-    return X_STATUS_END_OF_FILE;
+  if (!file_) {
+    return X_STATUS_NO_SUCH_FILE;
   }
 
-  size_t real_offset = entry_->data_offset() + byte_offset;
-  size_t real_length =
+  const size_t real_offset = entry_->data_offset() + byte_offset;
+  const size_t real_length =
       std::min(buffer_length, entry_->data_size() - byte_offset);
-  std::memcpy(buffer, entry_->mmap()->data() + real_offset, real_length);
-  *out_bytes_read = real_length;
+  if (!xe::filesystem::Seek(file_, static_cast<int64_t>(real_offset), SEEK_SET)) {
+    return X_STATUS_END_OF_FILE;
+  }
+  const size_t bytes_read = fread(buffer, 1, real_length, file_);
+  *out_bytes_read = bytes_read;
+  if (!bytes_read && real_length) {
+    return X_STATUS_END_OF_FILE;
+  }
   return X_STATUS_SUCCESS;
 }
 

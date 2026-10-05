@@ -317,6 +317,13 @@ X_STATUS Emulator::TerminateTitle() {
 
 const std::unique_ptr<vfs::Device> Emulator::CreateVfsDevice(
     const std::filesystem::path& path, const std::string_view mount_path) {
+  // Xbox UWP removable-storage access can make signature probing fail for ISOs.
+  // Trust the .iso extension here just like LaunchPath does.
+  if (_stricmp(path.extension().string().c_str(), ".iso") == 0) {
+    xe::LiveDebugWrite("[CreateVfsDevice] .iso extension; creating DiscImageDevice directly\n");
+    return std::make_unique<vfs::DiscImageDevice>(mount_path, path);
+  }
+
   // Must check if the type has changed e.g. XamSwapDisc
   switch (xe::GetFileSignature(path)) {
     case FileSignatureType::XEX1:
@@ -474,7 +481,15 @@ Emulator::FileSignatureType GetFileSignature(
     return Emulator::FileSignatureType::ZAR;
   }
 
-  // Check if XISO
+  // Check if XISO. On Xbox UWP, don't deep-probe every unknown file on a
+  // recursively scanned USB drive. Disc images there are explicitly added by
+  // the .iso extension in the frontend, and deep-probing textures/BIOS/etc.
+  // makes startup take minutes.
+#if XE_PLATFORM_WINRT
+  if (_stricmp(path.extension().string().c_str(), ".iso") != 0) {
+    return Emulator::FileSignatureType::Unknown;
+  }
+#endif
   std::unique_ptr<vfs::Device> device =
       std::make_unique<vfs::DiscImageDevice>("", path);
 
@@ -489,31 +504,67 @@ Emulator::FileSignatureType GetFileSignature(
 
 X_STATUS Emulator::LaunchPath(const std::filesystem::path& path) {
   X_STATUS mount_result = X_STATUS_SUCCESS;
+  FileSignatureType signature;
+  if (_stricmp(path.extension().string().c_str(), ".iso") == 0) {
+    xe::LiveDebugWrite(
+        "[LaunchPath] .iso extension detected; bypassing signature probe and forcing XISO\n");
+    signature = FileSignatureType::XISO;
+  } else {
+    signature = xe::GetFileSignature(path);
+  }
+  xe::LiveDebugWrite(fmt::format("[LaunchPath] path={} signature={}\n",
+                                 xe::path_to_utf8(path),
+                                 static_cast<int>(signature)));
 
-  switch (xe::GetFileSignature(path)) {
+  switch (signature) {
     case FileSignatureType::XEX1:
     case FileSignatureType::XEX2:
     case FileSignatureType::ELF: {
       mount_result = MountPath(path, "\\Device\\Harddisk0\\Partition1");
-      return mount_result ? mount_result : LaunchXexFile(path);
+      xe::LiveDebugWrite(fmt::format("[LaunchPath] XEX mount=0x{:08X}\n",
+                                     static_cast<uint32_t>(mount_result)));
+      if (mount_result) return mount_result;
+      auto launch_result = LaunchXexFile(path);
+      xe::LiveDebugWrite(fmt::format("[LaunchPath] LaunchXexFile=0x{:08X}\n",
+                                     static_cast<uint32_t>(launch_result)));
+      return launch_result;
     } break;
     case FileSignatureType::LIVE:
     case FileSignatureType::CON:
     case FileSignatureType::PIRS: {
       mount_result = MountPath(path, "\\Device\\Cdrom0");
-      return mount_result ? mount_result : LaunchStfsContainer(path);
+      xe::LiveDebugWrite(fmt::format("[LaunchPath] STFS mount=0x{:08X}\n",
+                                     static_cast<uint32_t>(mount_result)));
+      if (mount_result) return mount_result;
+      auto launch_result = LaunchStfsContainer(path);
+      xe::LiveDebugWrite(fmt::format("[LaunchPath] LaunchStfsContainer=0x{:08X}\n",
+                                     static_cast<uint32_t>(launch_result)));
+      return launch_result;
     } break;
     case FileSignatureType::XISO: {
       mount_result = MountPath(path, "\\Device\\Cdrom0");
-      return mount_result ? mount_result : LaunchDiscImage(path);
+      xe::LiveDebugWrite(fmt::format("[LaunchPath] XISO mount=0x{:08X}\n",
+                                     static_cast<uint32_t>(mount_result)));
+      if (mount_result) return mount_result;
+      auto launch_result = LaunchDiscImage(path);
+      xe::LiveDebugWrite(fmt::format("[LaunchPath] LaunchDiscImage=0x{:08X}\n",
+                                     static_cast<uint32_t>(launch_result)));
+      return launch_result;
     } break;
     case FileSignatureType::ZAR: {
       mount_result = MountPath(path, "\\Device\\Cdrom0");
-      return mount_result ? mount_result : LaunchDiscArchive(path);
+      xe::LiveDebugWrite(fmt::format("[LaunchPath] ZAR mount=0x{:08X}\n",
+                                     static_cast<uint32_t>(mount_result)));
+      if (mount_result) return mount_result;
+      auto launch_result = LaunchDiscArchive(path);
+      xe::LiveDebugWrite(fmt::format("[LaunchPath] LaunchDiscArchive=0x{:08X}\n",
+                                     static_cast<uint32_t>(launch_result)));
+      return launch_result;
     } break;
     case FileSignatureType::EXE:
     case FileSignatureType::Unknown:
     default:
+      xe::LiveDebugWrite("[LaunchPath] unsupported or unknown signature\n");
       return X_STATUS_NOT_SUPPORTED;
       break;
   }
@@ -1009,7 +1060,13 @@ std::string Emulator::FindLaunchModule() {
     }
   }
 
-  return path + default_module;
+  auto resolved_module = path + default_module;
+  auto* resolved_entry = file_system_->ResolvePath(resolved_module);
+  xe::LiveDebugWrite(fmt::format(
+      "[FindLaunchModule] module={} resolved={}{}\n", resolved_module,
+      resolved_entry != nullptr,
+      resolved_entry ? fmt::format(" size={}", resolved_entry->size()) : ""));
+  return resolved_module;
 }
 
 static std::string format_version(xex2_version version) {
@@ -1063,11 +1120,21 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   auto xam = kernel_state()->GetKernelModule<kernel::xam::XamModule>("xam.xex");
 
   XELOGI("Loading module {}", module_path);
+  auto* launch_entry = file_system_->ResolvePath(module_path);
+  xe::LiveDebugWrite(fmt::format(
+      "[CompleteLaunch] module={} ResolvePath={}{}\n", module_path,
+      launch_entry != nullptr,
+      launch_entry ? fmt::format(" size={} attrs=0x{:X}", launch_entry->size(),
+                                 launch_entry->attributes())
+                   : ""));
   auto module = kernel_state_->LoadUserModule(module_path);
   if (!module) {
+    xe::LiveDebugWrite(fmt::format(
+        "[CompleteLaunch] LoadUserModule failed for {}\n", module_path));
     XELOGE("Failed to load user module {}", xe::path_to_utf8(path));
     return X_STATUS_NOT_FOUND;
   }
+  xe::LiveDebugWrite("[CompleteLaunch] LoadUserModule succeeded\n");
 
   X_RESULT result = kernel_state_->ApplyTitleUpdate(module);
   if (XFAILED(result)) {

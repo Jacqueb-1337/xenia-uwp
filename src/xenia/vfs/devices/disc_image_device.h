@@ -10,6 +10,7 @@
 #ifndef XENIA_VFS_DEVICES_DISC_IMAGE_DEVICE_H_
 #define XENIA_VFS_DEVICES_DISC_IMAGE_DEVICE_H_
 
+#include <cstdio>
 #include <memory>
 #include <string>
 
@@ -38,7 +39,7 @@ class DiscImageDevice : public Device {
   uint32_t component_name_max_length() const override { return 255; }
 
   uint32_t total_allocation_units() const override {
-    return uint32_t(mmap_->size() / sectors_per_allocation_unit() /
+    return uint32_t(file_size_ / sectors_per_allocation_unit() /
                     bytes_per_sector());
   }
   uint32_t available_allocation_units() const override { return 0; }
@@ -57,10 +58,10 @@ class DiscImageDevice : public Device {
   std::string name_;
   std::filesystem::path host_path_;
   std::unique_ptr<Entry> root_entry_;
-  std::unique_ptr<MappedMemory> mmap_;
+  uint64_t file_size_ = 0;
 
   typedef struct {
-    uint8_t* ptr;
+    FILE* file;
     size_t size;         // Size (bytes) of total image.
     size_t game_offset;  // Offset (bytes) of game partition.
     size_t root_sector;  // Offset (sector) of root.
@@ -68,10 +69,12 @@ class DiscImageDevice : public Device {
     size_t root_size;    // Size (bytes) of root.
   } ParseState;
 
+  bool ReadAt(ParseState* state, size_t offset, void* buffer, size_t length);
   Error Verify(ParseState* state);
   bool VerifyMagic(ParseState* state, size_t offset);
-  Error ReadAllEntries(ParseState* state, const uint8_t* root_buffer);
-  bool ReadEntry(ParseState* state, const uint8_t* buffer,
+  Error ReadAllEntries(ParseState* state, const uint8_t* root_buffer,
+                       size_t root_buffer_size);
+  bool ReadEntry(ParseState* state, const uint8_t* buffer, size_t buffer_size,
                  uint16_t entry_ordinal, DiscImageEntry* parent);
 };
 

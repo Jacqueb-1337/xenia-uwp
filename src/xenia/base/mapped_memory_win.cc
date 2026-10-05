@@ -11,6 +11,10 @@
 #include <mutex>
 #include <vector>
 
+#if XE_PLATFORM_WINRT
+#include <fileapifromapp.h>
+#endif
+
 #include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/mapped_memory.h"
@@ -34,7 +38,13 @@ class Win32MappedMemory : public MappedMemory {
   static constexpr HANDLE kMappingHandleInvalid = nullptr;
 
   ~Win32MappedMemory() override {
-    if (data_) {
+    if (!chunked_views_.empty()) {
+      for (void* view : chunked_views_) {
+        UnmapViewOfFile(view);
+      }
+      chunked_views_.clear();
+      data_ = nullptr;
+    } else if (data_) {
       UnmapViewOfFile(data_);
     }
     if (mapping_handle != kMappingHandleInvalid) {
@@ -46,7 +56,13 @@ class Win32MappedMemory : public MappedMemory {
   }
 
   void Close(uint64_t truncate_size) override {
-    if (data_) {
+    if (!chunked_views_.empty()) {
+      for (void* view : chunked_views_) {
+        UnmapViewOfFile(view);
+      }
+      chunked_views_.clear();
+      data_ = nullptr;
+    } else if (data_) {
       UnmapViewOfFile(data_);
       data_ = nullptr;
     }
@@ -67,8 +83,15 @@ class Win32MappedMemory : public MappedMemory {
     }
   }
 
-  void Flush() override { FlushViewOfFile(data(), size()); }
+  void Flush() override {
+    if (chunked_views_.empty()) {
+      FlushViewOfFile(data(), size());
+    }
+  }
   bool Remap(size_t offset, size_t length) override {
+    if (!chunked_views_.empty()) {
+      return false;
+    }
     size_t aligned_offset = offset & ~(memory::allocation_granularity() - 1);
     size_t aligned_length = length + (offset - aligned_offset);
 
@@ -96,9 +119,96 @@ class Win32MappedMemory : public MappedMemory {
     return true;
   }
 
+  bool MapReadOnlyFileInChunks(size_t file_size) {
+#if XE_PLATFORM_WINRT
+    if (!file_size || mapping_handle == kMappingHandleInvalid) {
+      return false;
+    }
+
+    SYSTEM_INFO system_info = {};
+    GetSystemInfo(&system_info);
+    const size_t page_size = system_info.dwPageSize;
+    const size_t reserve_size = xe::round_up(file_size, page_size);
+    constexpr size_t kChunkSize = 256ull * 1024ull * 1024ull;
+    HANDLE process = GetCurrentProcess();
+
+    auto* base = reinterpret_cast<uint8_t*>(VirtualAlloc2FromApp(
+        process, nullptr, reserve_size,
+        MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, PAGE_NOACCESS, nullptr, 0));
+    if (!base) {
+      LiveDebugWrite(fmt::format(
+          "[MappedMemory] chunked reserve failed size={} GetLastError={}\n",
+          reserve_size, GetLastError()));
+      return false;
+    }
+
+    LiveDebugWrite(fmt::format(
+        "[MappedMemory] chunked fallback reserved {} bytes for {}-byte file\n",
+        reserve_size, file_size));
+
+    size_t offset = 0;
+    while (offset < reserve_size) {
+      const size_t chunk_size =
+          std::min(kChunkSize, reserve_size - offset);
+      const bool has_remainder = offset + chunk_size < reserve_size;
+      uint8_t* chunk_address = base + offset;
+
+      if (has_remainder &&
+          !VirtualFree(chunk_address, chunk_size,
+                       MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER)) {
+        const DWORD error = GetLastError();
+        LiveDebugWrite(fmt::format(
+            "[MappedMemory] placeholder split failed offset={} size={} "
+            "GetLastError={}\n",
+            offset, chunk_size, error));
+        for (void* view : chunked_views_) {
+          UnmapViewOfFile(view);
+        }
+        chunked_views_.clear();
+        VirtualFree(chunk_address, 0, MEM_RELEASE);
+        return false;
+      }
+
+      void* view = MapViewOfFile3FromApp(
+          mapping_handle, process, chunk_address, offset, chunk_size,
+          MEM_REPLACE_PLACEHOLDER, PAGE_READONLY, nullptr, 0);
+      if (!view) {
+        const DWORD error = GetLastError();
+        LiveDebugWrite(fmt::format(
+            "[MappedMemory] chunk map failed offset={} size={} "
+            "GetLastError={}\n",
+            offset, chunk_size, error));
+        for (void* mapped_view : chunked_views_) {
+          UnmapViewOfFile(mapped_view);
+        }
+        chunked_views_.clear();
+        VirtualFree(chunk_address, 0, MEM_RELEASE);
+        if (has_remainder) {
+          VirtualFree(chunk_address + chunk_size, 0, MEM_RELEASE);
+        }
+        return false;
+      }
+
+      chunked_views_.push_back(view);
+      offset += chunk_size;
+    }
+
+    data_ = base;
+    size_ = file_size;
+    LiveDebugWrite(fmt::format(
+        "[MappedMemory] chunked mapping succeeded with {} views\n",
+        chunked_views_.size()));
+    return true;
+#else
+    (void)file_size;
+    return false;
+#endif
+  }
+
   HANDLE file_handle = kFileHandleInvalid;
   HANDLE mapping_handle = kMappingHandleInvalid;
   DWORD view_access_ = 0;
+  std::vector<void*> chunked_views_;
 };
 
 std::unique_ptr<MappedMemory> MappedMemory::Open(
@@ -136,9 +246,19 @@ std::unique_ptr<MappedMemory> MappedMemory::Open(
   auto mm = std::make_unique<Win32MappedMemory>();
   mm->view_access_ = view_access;
 
+#if XE_PLATFORM_WINRT
+  mm->file_handle = CreateFileFromAppW(path.c_str(), file_access, file_share,
+                                       nullptr, create_mode,
+                                       FILE_ATTRIBUTE_NORMAL, nullptr);
+#else
   mm->file_handle = CreateFile(path.c_str(), file_access, file_share, nullptr,
                                create_mode, FILE_ATTRIBUTE_NORMAL, nullptr);
+#endif
   if (mm->file_handle == Win32MappedMemory::kFileHandleInvalid) {
+#if XE_PLATFORM_WINRT
+    LiveDebugWrite(fmt::format(
+        "[MappedMemory] file open failed GetLastError={}\n", GetLastError()));
+#endif
     return nullptr;
   }
 
@@ -152,6 +272,10 @@ std::unique_ptr<MappedMemory> MappedMemory::Open(
                                ULONG64(aligned_length), nullptr);
 #endif
   if (mm->mapping_handle == Win32MappedMemory::kMappingHandleInvalid) {
+#if XE_PLATFORM_WINRT
+    LiveDebugWrite(fmt::format(
+        "[MappedMemory] file mapping failed GetLastError={}\n", GetLastError()));
+#endif
     return nullptr;
   }
 
@@ -165,6 +289,19 @@ std::unique_ptr<MappedMemory> MappedMemory::Open(
                            ULONG64(aligned_offset), aligned_length));
 #endif
   if (!mm->data_) {
+#if XE_PLATFORM_WINRT
+    const DWORD map_error = GetLastError();
+    LiveDebugWrite(fmt::format(
+        "[MappedMemory] map view failed GetLastError={}\n", map_error));
+    if (mode == Mode::kRead && offset == 0 && length == 0 &&
+        map_error == ERROR_NOT_ENOUGH_MEMORY) {
+      LARGE_INTEGER file_size = {};
+      if (GetFileSizeEx(mm->file_handle, &file_size) && file_size.QuadPart > 0 &&
+          mm->MapReadOnlyFileInChunks(static_cast<size_t>(file_size.QuadPart))) {
+        return std::move(mm);
+      }
+    }
+#endif
     return nullptr;
   }
 
