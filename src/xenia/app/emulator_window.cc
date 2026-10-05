@@ -1663,7 +1663,7 @@ xe::X_STATUS EmulatorWindow::RunTitle(std::filesystem::path path_to_file) {
 
     xe::ui::ImGuiDialog::ShowMessageBox(
         imgui_drawer_.get(), "Title Launch Failed!",
-        "Failed to launch title.\n\nCheck xenia.log for technical details.");
+        fmt::format("Failed to launch title.\n\nStatus: 0x{:08X}\nPath: {}", static_cast<uint32_t>(result), xe::path_to_utf8(abs_path)));
   } else {
     AddRecentlyLaunchedTitle(path_to_file, emulator_->title_name());
 
