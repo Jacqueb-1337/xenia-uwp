@@ -66,6 +66,9 @@ class FileLogSink final : public LogSink {
   bool owns_file_;
 };
 
+// Sends immediate diagnostics to the VS Code live listener on UWP.
+void LiveDebugWrite(const std::string_view str);
+
 class DebugPrintLogSink final : public LogSink {
  public:
   DebugPrintLogSink() = default;

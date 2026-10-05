@@ -73,6 +73,14 @@ struct App : implements<App, IFrameworkViewSource, IFrameworkView>
             [](const winrt::Windows::Foundation::IInspectable&,
                const BackRequestedEventArgs& args) { args.Handled(true); });
 
+        auto core_window = CoreWindow::GetForCurrentThread();
+        core_window.KeyDown([](const CoreWindow&, const KeyEventArgs& args) {
+          UWP::HandleVirtualKey(static_cast<uint32_t>(args.VirtualKey()), true);
+        });
+        core_window.KeyUp([](const CoreWindow&, const KeyEventArgs& args) {
+          UWP::HandleVirtualKey(static_cast<uint32_t>(args.VirtualKey()), false);
+        });
+
         winrt::Windows::Graphics::Display::DisplayInformation displayInfo =
             winrt::Windows::Graphics::Display::DisplayInformation::
                 GetForCurrentView();

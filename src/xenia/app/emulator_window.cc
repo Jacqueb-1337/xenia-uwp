@@ -1611,6 +1611,8 @@ std::string EmulatorWindow::CanonicalizeFileExtension(
 }
 
 xe::X_STATUS EmulatorWindow::RunTitle(std::filesystem::path path_to_file) {
+  xe::LiveDebugWrite(fmt::format("[RunTitle] selected={}\\n",
+                                     xe::path_to_utf8(path_to_file)));
   bool titleExists = !std::filesystem::exists(path_to_file);
 
   if (path_to_file.empty() || titleExists) {
@@ -1642,6 +1644,9 @@ xe::X_STATUS EmulatorWindow::RunTitle(std::filesystem::path path_to_file) {
   auto abs_path = std::filesystem::absolute(path_to_file);
 
   auto extension = CanonicalizeFileExtension(abs_path);
+  xe::LiveDebugWrite(fmt::format("[RunTitle] abs={} extension={} exists={}\\n",
+                                     xe::path_to_utf8(abs_path), extension,
+                                     std::filesystem::exists(abs_path)));
 
   if (extension == ".7z" || extension == ".zip" || extension == ".rar" ||
       extension == ".tar" || extension == ".gz") {
@@ -1655,6 +1660,8 @@ xe::X_STATUS EmulatorWindow::RunTitle(std::filesystem::path path_to_file) {
   }
 
   auto result = emulator_->LaunchPath(abs_path);
+  xe::LiveDebugWrite(fmt::format("[RunTitle] LaunchPath result=0x{:08X}\\n",
+                                     static_cast<uint32_t>(result)));
 
   imgui_drawer_.get()->ClearDialogs();
 

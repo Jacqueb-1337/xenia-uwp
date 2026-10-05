@@ -16,6 +16,12 @@
 #include <mutex>
 #include <vector>
 
+#if XE_PLATFORM_WINRT
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#endif
+
 #include "third_party/disruptorplus/include/disruptorplus/multi_threaded_claim_strategy.hpp"
 #include "third_party/disruptorplus/include/disruptorplus/ring_buffer.hpp"
 #include "third_party/disruptorplus/include/disruptorplus/sequence_barrier.hpp"
@@ -84,6 +90,73 @@ struct LogLine {
 };
 
 thread_local char thread_log_buffer_[64_KiB];
+void LiveDebugWrite(const std::string_view str) {
+#if XE_PLATFORM_WINRT
+  if (!str.empty()) {
+    auto debug_path = xe::filesystem::GetUserFolder() / "xenia-live-debug.log";
+    if (auto* debug_file = xe::filesystem::OpenFile(debug_path, "ab")) {
+      fwrite(str.data(), 1, str.size(), debug_file);
+      fflush(debug_file);
+      fclose(debug_file);
+    }
+  }
+  static SOCKET live_socket = INVALID_SOCKET;
+  static sockaddr_in client = {};
+  static bool have_client = false;
+  static std::once_flag init_once;
+  std::call_once(init_once, []() {
+    WSADATA wsa_data = {};
+    if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
+      return;
+    }
+    live_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (live_socket == INVALID_SOCKET) {
+      return;
+    }
+    u_long nonblocking = 1;
+    ioctlsocket(live_socket, FIONBIO, &nonblocking);
+    sockaddr_in bind_address = {};
+    bind_address.sin_family = AF_INET;
+    bind_address.sin_port = htons(46000);
+    bind_address.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(live_socket, reinterpret_cast<const sockaddr*>(&bind_address),
+             sizeof(bind_address)) == SOCKET_ERROR) {
+      closesocket(live_socket);
+      live_socket = INVALID_SOCKET;
+    }
+  });
+  if (live_socket == INVALID_SOCKET) {
+    return;
+  }
+
+  char handshake[64];
+  sockaddr_in sender = {};
+  int sender_length = sizeof(sender);
+  while (recvfrom(live_socket, handshake, sizeof(handshake), 0,
+                  reinterpret_cast<sockaddr*>(&sender),
+                  &sender_length) > 0) {
+    client = sender;
+    have_client = true;
+    sender_length = sizeof(sender);
+  }
+
+  if (!have_client || str.empty()) {
+    return;
+  }
+  const char* data = str.data();
+  size_t remaining = str.size();
+  constexpr size_t kMaxDatagramPayload = 1200;
+  while (remaining) {
+    int chunk = static_cast<int>(std::min(remaining, kMaxDatagramPayload));
+    sendto(live_socket, data, chunk, 0,
+           reinterpret_cast<const sockaddr*>(&client), sizeof(client));
+    data += chunk;
+    remaining -= chunk;
+  }
+#else
+  (void)str;
+#endif
+}
 
 FileLogSink::~FileLogSink() {
   if (file_) {
@@ -97,6 +170,12 @@ FileLogSink::~FileLogSink() {
 void FileLogSink::Write(const char* buf, size_t size) {
   if (file_) {
     fwrite(buf, 1, size, file_);
+#if XE_PLATFORM_WINRT
+    // UWP may terminate or suspend before stdio buffers are flushed.
+    // Keep the diagnostic log readable after launch failures.
+    fflush(file_);
+    LiveDebugWrite(std::string_view(buf, size));
+#endif
   }
 }
 
@@ -462,6 +541,9 @@ void InitializeLogging(const std::string_view app_name) {
     logger_->AddLogSink(std::make_unique<DebugPrintLogSink>());
   }
 #endif  // XE_PLATFORM_ANDROID
+#if XE_PLATFORM_WINRT
+  LiveDebugWrite("[xenia-live] logger initialized\n");
+#endif
 }
 
 void ShutdownLogging() {

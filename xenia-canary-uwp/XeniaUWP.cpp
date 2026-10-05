@@ -85,18 +85,32 @@ void UWP::UpdateImGuiIO() {
     UWP::g_char_buffer.clear();
   }
 
+  bool a = UWP::IsVirtualKeyDown(0xC3);
+  bool b = UWP::IsVirtualKeyDown(0xC4);
+  bool dpad_up = UWP::IsVirtualKeyDown(0xCB);
+  bool dpad_down = UWP::IsVirtualKeyDown(0xCC);
+  bool dpad_left = UWP::IsVirtualKeyDown(0xCD);
+  bool dpad_right = UWP::IsVirtualKeyDown(0xCE);
+
   auto driver = static_cast<xe::ui::UWPWindow*>(s_window)->xinputdriver();
-  if (!driver) return;
+  if (driver) {
+    hid::X_INPUT_STATE state = {};
+    if (driver->GetState(0, &state) == X_STATUS_SUCCESS) {
+      a |= (state.gamepad.buttons & X_INPUT_GAMEPAD_A) != 0;
+      b |= (state.gamepad.buttons & X_INPUT_GAMEPAD_B) != 0;
+      dpad_left |= (state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_LEFT) != 0;
+      dpad_right |= (state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_RIGHT) != 0;
+      dpad_up |= (state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_UP) != 0;
+      dpad_down |= (state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_DOWN) != 0;
+    }
+  }
 
-  hid::X_INPUT_STATE state;
-  if (driver->GetState(0, &state) != X_STATUS_SUCCESS) return;
-
-  io.AddKeyEvent(ImGuiKey_GamepadFaceDown, state.gamepad.buttons & X_INPUT_GAMEPAD_A);
-  io.AddKeyEvent(ImGuiKey_GamepadFaceRight, state.gamepad.buttons & X_INPUT_GAMEPAD_B);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_LEFT);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadRight, state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_RIGHT);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadUp, state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_UP);
-  io.AddKeyEvent(ImGuiKey_GamepadDpadDown, state.gamepad.buttons & X_INPUT_GAMEPAD_DPAD_DOWN);
+  io.AddKeyEvent(ImGuiKey_GamepadFaceDown, a);
+  io.AddKeyEvent(ImGuiKey_GamepadFaceRight, b);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadLeft, dpad_left);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadRight, dpad_right);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadUp, dpad_up);
+  io.AddKeyEvent(ImGuiKey_GamepadDpadDown, dpad_down);
 }
 
 void RecurseFolderForGames(std::string path) {
@@ -108,6 +122,14 @@ void RecurseFolderForGames(std::string path) {
       }
 
       if (!file.is_regular_file()) continue;
+
+      // ISO images are valid games even when signature probing is unavailable
+      // through the Xbox removable-storage path. Include them by extension and
+      // let LaunchPath perform the definitive validation when selected.
+      if (_stricmp(file.path().extension().string().c_str(), ".iso") == 0) {
+        s_games.push_back({file.path().string(), file.path().stem().string()});
+        continue;
+      }
 
       switch (xe::GetFileSignature(file.path())) {
         case xe::Emulator::FileSignatureType::XEX1:
@@ -124,9 +146,22 @@ void RecurseFolderForGames(std::string path) {
           s_games.push_back({file.path().string(), filename});
           break;
         }
+        case xe::Emulator::FileSignatureType::XISO: {
+          if (_stricmp(file.path().extension().string().c_str(), ".iso") != 0)
+            continue;
+          std::string filename = file.path().stem().string();
+          s_games.push_back({file.path().string(), filename});
+          break;
+        }
         case xe::Emulator::FileSignatureType::CON:
-        case xe::Emulator::FileSignatureType::PIRS:
+        case xe::Emulator::FileSignatureType::PIRS: {
+          std::string filename = file.path().stem().string();
+          s_games.push_back({file.path().string(), filename});
+          break;
+        }
         case xe::Emulator::FileSignatureType::ZAR: {
+          if (_stricmp(file.path().extension().string().c_str(), ".zar") != 0)
+            continue;
           std::string filename = file.path().stem().string();
           s_games.push_back({file.path().string(), filename});
           break;
