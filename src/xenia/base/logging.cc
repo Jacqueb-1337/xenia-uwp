@@ -441,7 +441,7 @@ void InitializeLogging(const std::string_view app_name) {
   if (cvars::log_to_logcat) {
     logger_->AddLogSink(std::make_unique<AndroidLogSink>(app_name));
   }
-//#else // if UWP, we should fix this at some point, for now it's annoying to get a UWP path to here
+#else  // UWP GetExecutableFolder() maps to LocalState, which is writable.
   FILE* log_file = nullptr;
   if (cvars::log_file.empty()) {
     // Default to app name.
